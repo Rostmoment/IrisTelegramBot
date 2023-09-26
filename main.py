@@ -27,7 +27,6 @@ async def getMessageText(msg: types.Message):
     # Просто чтобы было удобнее
     text = msg.text
     send = msg.answer
-    admins = []
     # Подключаем класс функций
     functions = Functions(text)
     botData = functions.loadJson("settings/settings.json")
@@ -42,10 +41,12 @@ async def getMessageText(msg: types.Message):
         tablesData = tables.cursor()
         # Если нету записи об пользователе то создаем, а если есть то обновляем данные которые не актуальные
         db.updateUsers(msg)
+        if msg.chat.type != "private":
+            db.addMsgToCount(msg)
         # Сохраняем ранг пользователя в переменную rank чтобы потом проверять какой ранг админа у него
         tablesData.execute(f"SELECT rank FROM users WHERE id = {msg.from_user.id}")
         rank = tablesData.fetchall()[0][0]
-        # Если сообщения без текста то не проверяем егоq
+        # Если сообщения без текста то не проверяем его
         if not msg.text:
             return
         # Снимает всех с админа
@@ -71,7 +72,6 @@ async def getMessageText(msg: types.Message):
             if len(nick) > botData["symbolLimit"]:
                 await send(f"✏️ Максимальная длина ника {botData['symbolLimit']} символов")
                 return
-            print(nick)
             tablesData.execute(f"SELECT nick, id FROM users WHERE nick = '{nick}'")
             res = tablesData.fetchall()
             if len(res) != 0:
@@ -81,34 +81,44 @@ async def getMessageText(msg: types.Message):
             tablesData.execute(f"UPDATE users SET customNick = 1 WHERE id = {msg.from_user.id}")
             tablesData.execute(f"UPDATE users SET nick = '{nick}' WHERE id = {msg.from_user.id}")
             await send(f"✅ Ник пользователя изменен на «{nick}»")
-        # Добавляем админов в список
-        for x in range(1, 6):
-            tablesData.execute(f"SELECT id FROM users WHERE rank = {x}")
-            res = tablesData.fetchall()
-            admins.append(res)
         # Список админов
-        # if functions.startInList(whoAdmin):
-        #     if len(admins[0]) + len(admins[1]) + len(admins[2]) + len(admins[3]) + len(admins[4]) == 0:
-        #         await send("🗓 В этой беседе царит анархия...")
-        #         return
-        #     text = "🎾 - админ онлайн\n🏐 - админ оффлайн\n\n"
-        #     for x in range(5):
-        #         if len(admins[x]) == 1:
-        #             tablesData.execute(f"SELECT nick FROM users WHERE id = '{admins[x][0][0]}'")
-        #             res = tablesData.fetchall()
-        #             print(admins[x][0][0], type(admins[x][0][0]))
-        #             hyperlink = markdown.hlink(res, f"tg://openmessage?user_id={admins[x][0][0]}")
-        #             text += f"{'⭐'*(x+1)} {botData[f'rank{x+1}'][0]}\n{hyperlink}\n\n"
-        #         elif len(admins[x]) > 1:
-        #             text += f"{'⭐' * (x + 1)} {botData[f'rank{x + 1}'][4]}\n"
-        #             for y in range(len(admins[x])):
-        #                 print(admins[x][y], type(admins[x][y]))
-        #                 tablesData.execute(f"SELECT nick FROM users WHERE id = {admins[x][y][0]}")
-        #                 res = tablesData.fetchall()[0][0]
-        #                 hyperlink = markdown.hlink(res, f"tg://openmessage?user_id={admins[x][y][0]}")
-        #                 text += f"{hyperlink}\n"
-        #             text += "\n"
-        #     await send(text)
+        if functions.startInList(whoAdmin):
+            totalAdmins = 0
+            for x in range(1, 6):
+                tablesData.execute(f"SELECT nick, id FROM users WHERE rank = {x}")
+                res = tablesData.fetchall()
+                totalAdmins += len(res)
+            if totalAdmins == 0:
+                await send("🗓 В этом чате царит анархия...")
+                return
+            text = ""
+            for x in range(-5, 0):
+                x = -x
+                rank = botData[f"rank{x}"]
+                tablesData.execute(f"SELECT nick, id, username FROM users WHERE rank = {x}")
+                res = tablesData.fetchall()
+                if len(res) == 1:
+                    status = await userBot.get_users(res[0][2])
+                    status = status.status
+                    if status == enums.UserStatus.ONLINE:
+                        status = "🎾"
+                    else:
+                        status = "🏐"
+                    hyperlink = markdown.hlink(res[0][0], f"tg://openmessage?user_id={res[0][1]}")
+                    text += f"{'⭐'*x} {rank[0]}\n{status} {hyperlink}\n\n"
+                elif len(res) > 1:
+                    text += f"{'⭐' * x} {rank[4]}\n"
+                    for y in range(len(res)):
+                        status = await userBot.get_users(res[y][2])
+                        status = status.status
+                        if status == enums.UserStatus.ONLINE:
+                            status = "🎾"
+                        else:
+                            status = "🏐"
+                        hyperlink = markdown.hlink(res[y][0], f"tg://openmessage?user_id={res[y][1]}")
+                        text += f"{status} {hyperlink}\n"
+                    text += "\n"
+            await send(text)
         # Востановить создателя
         if functions.startInList(returnOwner):
             owner = await bot.get_chat_member(msg.chat.id, msg.from_user.id)
@@ -173,12 +183,12 @@ async def getMessageText(msg: types.Message):
             if msg.reply_to_message:
                 tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.reply_to_message.from_user.id}")
                 hyperlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.reply_to_message.from_user.id}")
-                await send(f"🆔 пользователя {hyperlink} равен\n<code>@{msg.reply_to_message.from_user.id}</code>")
+                await send(f"🆔 пользователя {hyperlink} равен\n<code>@{msg.reply_to_message.from_user.id}</code>\n🆔 сообщения равен <code>@{msg.message_id}</code>")
             # Если сообщения не в ответ и длина сообщения равно длине команды (то-есть никто не указан в сообщении) выводим айди пользователя, который написал команду
             elif not msg.reply_to_message and len(text) == functions.startInList(getId):
                 tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.from_user.id}")
                 hyperlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.from_user.id}")
-                await send(f"🆔 пользователя {hyperlink} равен\n<code>@{msg.from_user.id}</code>\n🆔 чата: <code>@{msg.chat.id}</code>")
+                await send(f"🆔 пользователя {hyperlink} равен\n<code>@{msg.from_user.id}</code>\n🆔 чата равен <code>@{msg.chat.id}</code>")
             # Если сообщения не подходит ни под одно из условий выше, то выполняем 3 вариант
             else:
                 user = text[functions.startInList(getId) + 2:]
@@ -200,11 +210,105 @@ async def getMessageText(msg: types.Message):
                     hyperlink = markdown.hlink(res[0][0], f"tg://openmessage?user_id={user.id}")
                 await send(f"🆔 пользователя {hyperlink} равен\n<code>@{user.id}</code>")
         # Создание стикеров с сообщения
-        if msg.reply_to_message and functions.startInList(sticker) and msg.reply_to_message.text:
-            if functions.createSticker(msg.reply_to_message):
+        if functions.startInList(sticker):
+            text = text[len(functions.toSymbol(text, " ")):]
+            textForSticker = text[len(functions.toSymbol(text, " ")):]
+            textForSticker = textForSticker.strip()
+            if msg.reply_to_message:
+                functions.createSticker(msg.reply_to_message)
                 stickerToSend = types.FSInputFile("sticker.webp")
                 await msg.answer_sticker(sticker=stickerToSend)
                 os.remove("sticker.webp")
+        # Отметить всех
+        if functions.startInList(tagAll):
+            if rank < commandSettings["tagAll"]:
+                rank = botData[f'rank{commandSettings["tagAll"]}'][0]
+                await send(f"Команда доступна только с ранга «{rank}» ({commandSettings['tagAll']})")
+                return
+            text = text[functions.startInList(tagAll)+1:]
+            tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.from_user.id}")
+            hyperlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.from_user.id}")
+            textToSend = f"📢 Модератор {hyperlink} объявил общий сбор! (тут короче количесвто)\n"
+            async for member in userBot.get_chat_members(msg.chat.id):
+                if not member.user.username is None:
+                    textToSend += f"@{member.user.username} "
+            textToSend = textToSend.replace("тут короче количесвто", str(textToSend.count("@")))
+            if text:
+                textToSend += f"\n\n💬 ТЕКСТ ОБЪЯВЛЕНИЯ: \n{text}"
+            await send(textToSend)
+        # Бан
+        if functions.startInList(ban):
+            prichina, period = "", ""
+            if rank < commandSettings["ban"]:
+                rank = botData[f'rank{commandSettings["mute"]}'][0]
+                await send(f"Команда доступна только с ранга «{rank}» ({commandSettings['ban']})")
+                return
+            text = text[functions.startInList(ban)+1:]
+            text = text.strip()
+            parameters = text.split("\n")
+            tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.from_user.id}")
+            moderlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.from_user.id}")
+            if msg.reply_to_message:
+                tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.reply_to_message.from_user.id}")
+                hyperlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.reply_to_message.from_user.id}")
+                if len(text) == 0:
+                    await bot.ban_chat_member(chat_id=msg.chat.id, user_id=msg.reply_to_message.from_user.id, until_date=datetime.datetime.now()+datetime.timedelta(days=1))
+                    await send(f"🔴 {hyperlink} забанен на 1 день\n👤 Модератор: {moderlink}")
+                    return
+                if len(parameters) > 1:
+                    for x in range(1, len(parameters)):
+                        prichina += f"{parameters[x]}\n"
+                    await send(f"🔴 {hyperlink} забанен на {parameters[0]}\n👤 Модератор: {moderlink}\n💬 Причина: {prichina}")
+                    await bot.ban_chat_member(chat_id=msg.chat.id, user_id=msg.reply_to_message.from_user.id, until_date=functions.toDate(parameters[0]))
+                else:
+                    if functions.toDate(parameters[0]) is ValueError:
+                        for x in parameters:
+                            prichina += x
+                        await bot.ban_chat_member(chat_id=msg.chat.id, user_id=msg.reply_to_message.from_user.id, until_date=datetime.datetime.now() + datetime.timedelta(days=1))
+                        await send(f"🔴 {hyperlink} забанен на 1 день\n👤 Модератор: {moderlink}\n💬 Причина: {prichina}")
+                        return
+                    await bot.ban_chat_member(chat_id=msg.chat.id, user_id=msg.reply_to_message.from_user.id, until_date=functions.toDate(parameters[0]))
+                    await send(f"🔴 {hyperlink} забанен на {parameters[0]}\n👤 Модератор: {moderlink}")
+                return
+            if len(parameters) > 1:
+                for x in range(1, len(parameters)):
+                    prichina += f"{parameters[x]}\n"
+            parameters = parameters[0]
+            parameters.strip()
+            if parameters.count("@") > 0:
+                period = functions.toSymbol(parameters, "@")
+                user = parameters[len(functions.toSymbol(parameters, "@"))+1:]
+                user = user.strip()
+            else:
+                user = parameters[1:]
+            if not functions.startInList("123456789", user):
+                user = await userBot.get_users(user)
+            else:
+                user = await userBot.get_users(int(user))
+            tablesData.execute(f"SELECT nick FROM users WHERE id = {user.id}")
+            res = tablesData.fetchall()
+            if len(res) == 0:
+                if not user.is_contact:
+                    db.addUser(user)
+                    tablesData.execute(f"SELECT nick FROM users WHERE id = {user.id}")
+                    res = tablesData.fetchall()
+                    hyperlink = markdown.hlink(res[0][0], f"tg://openmessage?user_id={user.id}")
+                else:
+                    hyperlink = markdown.hlink("???", f"tg://openmessage?user_id={user.id}")
+            else:
+                hyperlink = markdown.hlink(res[0][0], f"tg://openmessage?user_id={user.id}")
+            if period:
+                await bot.ban_chat_member(chat_id=msg.chat.id, user_id=user.id, until_date=functions.toDate(period))
+                if prichina:
+                    await send(f"🔴 {hyperlink} забанен на {period}\n👤 Модератор: {moderlink}\n💬 Причина: {prichina}")
+                else:
+                    await send(f"🔴 {hyperlink} забанен на {period}\n👤 Модератор: {moderlink}")
+                return
+            await bot.ban_chat_member(chat_id=msg.chat.id, user_id=user.id, until_date=datetime.datetime.now() + datetime.timedelta(days=1))
+            if prichina:
+                await send(f"🔴 {hyperlink} забанен на 1 день\n👤 Модератор: {moderlink}\n💬 Причина: {prichina}")
+            else:
+                await send(f"🔴 {hyperlink} забанен на 1 день\n👤 Модератор: {moderlink}")
         # Мут
         if functions.startInList(mute):
             prichina, period = "", ""
@@ -277,7 +381,7 @@ async def getMessageText(msg: types.Message):
             if prichina:
                 await send(f"🔇 {hyperlink} лишается права слова на 1 день\n👤 Модератор: {moderlink}\n💬 Причина: {prichina}")
             else:
-                await send(f"🔇 {hyperlink} лишается права слова на 1 день\n👤 Модератор: {moderlink}\n💬 Причина: {prichina}")
+                await send(f"🔇 {hyperlink} лишается права слова на 1 день\n👤 Модератор: {moderlink}")
 
         # Кик
         if functions.startInList(kick):
@@ -313,14 +417,16 @@ async def getMessageText(msg: types.Message):
             else:
                 await send(f"🔴 {hyperlink} был исключен с чата\n👤Модератор: {markdown.hlink(tablesData.fetchall()[0][0], f'tg://openmessage?user_id={msg.from_user.id}')}\n💬Причина: {parameters[2]}")
         # Проверка работает ли бот
-        if text.upper().startswith("ПИНГ"):
+        if text.upper() == "ПИНГ":
             await send("ПОНГ")
-        if text.upper().startswith("ПИУ"):
+        if text.upper() == "ПИУ":
             await send("ПАУ")
-        if text.upper().startswith("КИНГ"):
+        if text.upper() == "КИНГ":
             await send("КОНГ")
-        if text.upper().startswith("БОТ"):
+        if text.upper() == "БОТ":
             await send("✅ На месте")
+        if text.upper() == "ТИК":
+            await send("ТОК")
         # Топ по сообщениям
         if functions.startInList(topCommand):
             if rank < commandSettings["topCommand"]:
