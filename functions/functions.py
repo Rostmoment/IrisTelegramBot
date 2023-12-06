@@ -2,6 +2,7 @@ import datetime
 import requests
 import base64
 import json
+import importlib.util
 from convertor.entities import *
 time_units = {
 	"минута": 60,
@@ -31,14 +32,30 @@ class Functions:
 			self.text = "Hello World!"
 			return
 		self.text = text
-	def startInList(self, getList: list or str, text=None):
+
+	def getAllCommands(self):
+		spec = importlib.util.spec_from_file_location("command", "system/command.py")
+		commandModule = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(commandModule)
+		combinedCommands = []
+		for attributeName in dir(commandModule):
+			attribute = getattr(commandModule, attributeName)
+			if isinstance(attribute, list):
+				combinedCommands.extend(attribute)
+		combinedCommands = list(set(combinedCommands))
+		combinedCommands.sort()
+		return combinedCommands
+	def startInList(self, getList: list or str, text=None, returnText = False):
 		if type(getList) == str:
 			getList = list(getList)
 		if text is None:
 			text = self.text.upper()
 		for item in getList:
 			if text.startswith(item):
-				return len(item)
+				if returnText:
+					return len(item), item
+				else:
+					return len(item)
 		return 0
 	def toSymbol(self, text: str, symbol: str):
 		newText = ""
@@ -48,51 +65,12 @@ class Functions:
 			else:
 				newText+=item
 		return newText
-	def createSticker(self, msg):
-		entities = []
-		if msg.entities:
-			entities = convertEntities(msg.entities)
-		json = {
-			"type": "quote",
-			"format": "webp",
-			"backgroundColor": "#1b1429",
-			"width": 512,
-			"height": 768,
-			"scale": 2,
-			"messages": [
-				{
-					"entities": entities,
-					"chatId": 66478514,
-					"avatar": True,
-					"from": {
-						"id": msg.from_user.id,
-						"first_name": msg.from_user.full_name,
-						"last_name": "",
-						"username": msg.from_user.username,
-						"language_code": msg.from_user.language_code,
-						"title": msg.from_user.full_name,
-						"photo": {
-							"small_file_id": "AQADAgADCKoxG7Jh9gMACBbSEZguAAMCAAOyYfYDAATieVimvJOu7M43BQABHgQ",
-							"small_file_unique_id": "AQADFtIRmC4AA843BQAB",
-							"big_file_id": "AQADAgADCKoxG7Jh9gMACBbSEZguAAMDAAOyYfYDAATieVimvJOu7NA3BQABHgQ",
-							"big_file_unique_id": "AQADFtIRmC4AA9A3BQAB"
-						},
-						"type": "private",
-						"name": msg.from_user.full_name
-					},
-					"text": msg.text,
-					"replyMessage": msg.reply_to_message
-				}
-			]
-		}
-		try:
-			response = requests.post("https://bot.lyo.su/quote/generate", json=json).json()
-			buffer = base64.b64decode(response["result"]["image"].encode("utf-8"))
-			open("sticker.webp", "wb").write(buffer)
-			return True
-		except Exception as e:
-			print(e)
-			return False
+	def unpackList(self, getList: list, upperAll=False):
+		if not upperAll:
+			getList = [item for sublist in getList for item in sublist]
+		else:
+			getList = [item.upper() for sublist in getList for item in sublist]
+		return getList
 	def loadJson(self, dir: str):
 		with open(dir) as fh:
 			data = json.load(fh)
