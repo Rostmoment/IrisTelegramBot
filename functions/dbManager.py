@@ -15,8 +15,34 @@ class Database:
             return userData[0][0]
         elif len(userData) == 0:
             return "0"
-    def initialize(self):
-        ...
+
+    def setValue(self, tableName: str, valueName: str, value: str or int, conditions = None):
+        TableData = self.tables.cursor()
+        if conditions is None:
+            if type(value) == type(1):
+                TableData.execute(f"UPDATE {tableName} SET {valueName} = {value}")
+            else:
+                TableData.execute(f"UPDATE {tableName} SET {valueName} = '{value}'")
+        else:
+            if type(value) == type(1):
+                TableData.execute(f"UPDATE {tableName} SET {valueName} = {value} {conditions}")
+            else:
+                TableData.execute(f"UPDATE {tableName} SET {valueName} = '{value}' {conditions}")
+        self.tables.commit()
+    def getValue(self, tableName: str, valuName: str, conditions = None):
+        TableData = self.tables.cursor()
+        if conditions is None:
+            TableData.execute(f"SELECT {valuName} FROM {tableName}")
+        else:
+            TableData.execute(f"SELECT {valuName} FROM {tableName} {conditions}")
+        return TableData.fetchall()
+    def addMsgToCount(self, msg):
+        TableData = self.tables.cursor()
+        TableData.execute(f"SELECT messageCount FROM users WHERE id = {msg.from_user.id}")
+        res = TableData.fetchall()[0][0]
+        res += 1
+        TableData.execute(f"UPDATE users SET messageCount = {res} WHERE id = {msg.from_user.id}")
+        self.tables.commit()
     def CreateDB(self):
         TableData = self.tables.cursor()
         TableData.execute("""
@@ -28,13 +54,9 @@ class Database:
         rank INTEGER DEFAULT 0,
         customNick INTEGER DEFAULT 0,
         messageCount INTEGER DEFAULT 0,
-        warn INTEGER DEFAULT 0
-        )""")
-        TableData.execute("""
-        CREATE TABLE IF NOT EXISTS notes (
-        text TEXT,
-        name TEXT,
-        author INTEGER DEFAULT 0
+        warn INTEGER DEFAULT 0,
+        nextFarm TEXT DEFAULT 0,
+        rostCoins INTEGER DEFAULT 0
         )""")
         return self.tables
     def addUser(self, user):
@@ -67,10 +89,6 @@ class Database:
            res = TableData.fetchall()[0][0]
            if res != msg.from_user.username:
                TableData.execute(f"UPDATE users SET username = '{msg.reply_to_message.from_user.username}' WHERE id = {msg.reply_to_message.from_user.id}")
-       TableData.execute(f"SELECT messageCount FROM users WHERE id = {msg.from_user.id}")
-       res = TableData.fetchall()[0][0]
-       res+=1
-       TableData.execute(f"UPDATE users SET messageCount = {res} WHERE id = {msg.from_user.id}")
        TableData.execute(f"SELECT nick, customNick FROM users WHERE id = {msg.from_user.id}")
        res = TableData.fetchall()[0]
        if not res[1] and res[0] != msg.from_user.full_name:
