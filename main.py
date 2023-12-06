@@ -1,6 +1,7 @@
 # импортируем модули
 import logging
-import os
+import jsonpickle
+import string
 import random
 import datetime
 import asyncio
@@ -8,36 +9,60 @@ import sqlite3 as sq
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import markdown
 # Импортируем остальные модули
+from system.bot import *
 from system.command import *
 # Кастом модуль, посмотрите dbManager.py в папке functions, чтобы увидеть как он работает
 from functions.dbManager import Database, Functions
 # Инициализация логирования
 logging.basicConfig(level=logging.INFO)
 # Инициализация бота и диспетчера
-from system.bot import *
 bot = Bot(token=token, parse_mode="HTML")
 dp = Dispatcher()
 permissions = {
     "can_send_messages": False,
     "can_send_other_messages": False
 }
+allowedLetters = [" ", "І", "Є", "Ї", "А", "Б", "В", "Г", "Д", "Е", "Ё", "Ж", "З", "И", "Й", "К", "Л", "М", "Н", "О", "П", "Р", "С", "Т", "У", "Ф", "Х", "Ц", "Ч", "Ш", "Щ", "Ъ", "Ы", "Ь", "Э", "Ю", "Я"]
+stringDatetimeFormat = "%Y-%m-%d %H:%M:%S.%f"
 # Определение обработчика сообщений
 @dp.message()
 async def getMessageText(msg: types.Message):
     # Просто чтобы было удобнее
+    global userRank, message
     text = msg.text
     send = msg.answer
+    reply = msg.reply
+    db = sq.connect("users.db")
+    cursor = db.cursor()
+    cursor.execute("""CREATE TABLE IF NOT EXISTS users (
+    id INTEGER,
+    premium INTEGER
+    )""")
+    db.commit()
+    cursor.execute(f"SELECT id FROM users WHERE id = {msg.from_user.id}")
+    userData = cursor.fetchall()
+    # Записываем есть ли у пользователя премиум
+    premium = False
+    if len(userData) == 0:
+        cursor.execute(f"INSERT INTO users (id, premium) VALUES({msg.from_user.id}, 0)")
+        db.commit()
+    else:
+        cursor.execute(f"SELECT premium FROM users WHERE id = {msg.from_user.id}")
+        premium = cursor.fetchall()
+        premium = premium[0][0]
+        premium = bool(premium)
     # Подключаем класс функций
     functions = Functions(text)
+    # Получаем настройки из json файлов
     botData = functions.loadJson("settings/settings.json")
     commandSettings = functions.loadJson("settings/commandSettings.json")
     # Создаем/загружаем файл с данными
-    db = Database(sq.connect("data.db"))
+    db = Database(sq.connect(f"chats/{msg.chat.id}.db"))
     tables = db.CreateDB()
     Database(tables).CreateDB()
     # Используем try, чтобы обработать возможные ошибки и вызвать finally
     try:
-        # Создаем новую переменную для редактировния таблицы
+        # Создаем новую переменную для редактирования таблиц
         tablesData = tables.cursor()
         # Если нету записи об пользователе то создаем, а если есть то обновляем данные которые не актуальные
         db.updateUsers(msg)
@@ -46,9 +71,20 @@ async def getMessageText(msg: types.Message):
         # Сохраняем ранг пользователя в переменную rank чтобы потом проверять какой ранг админа у него
         tablesData.execute(f"SELECT rank FROM users WHERE id = {msg.from_user.id}")
         rank = tablesData.fetchall()[0][0]
+        if msg.reply_to_message:
+            tablesData.execute(f"SELECT rank FROM users WHERE id = {msg.reply_to_message.from_user.id}")
+            userRank = tablesData.fetchall()[0][0]
         # Если сообщения без текста то не проверяем его
         if not msg.text:
             return
+        if msg.chat.type == "private":
+            await send("Бот работает только в чатах!")
+        # JSON сообщения
+        if functions.startInList(getJson):
+            with open("json.txt", "w") as fh:
+                fh.write(str(jsonpickle.encode(msg)))
+            fileToSend = types.FSInputFile("json.txt")
+            await msg.answer_document(fileToSend)
         # Снимает всех с админа
         if text.upper() in ["/СНЯТЬ ВСЕХ", "!СНЯТЬ ВСЕХ", ".СНЯТЬ ВСЕХ"]:
             if rank < commandSettings["adminEditor"]:
@@ -63,7 +99,10 @@ async def getMessageText(msg: types.Message):
             text = text[1:]
         # Удаление ника
         if text.upper() == "-НИК":
-            tablesData.execute(f"UPDATE users SET customNick = 0 WHERE id = {msg.from_user.id}")
+            if not msg.reply_to_message:
+                tablesData.execute(f"UPDATE users SET customNick = 0 WHERE id = {msg.from_user.id}")
+            elif rank == 5:
+                tablesData.execute(f"UPDATE users SET customNick = 0 WHERE id = {msg.reply_to_message.from_user.id}")
             await send("❎ Ник пользователя удалён")
             db.updateUsers(msg)
         # Смена ника
@@ -72,6 +111,16 @@ async def getMessageText(msg: types.Message):
             if len(nick) > botData["symbolLimit"]:
                 await send(f"✏️ Максимальная длина ника {botData['symbolLimit']} символов")
                 return
+            if len(nick) < 4:
+                await send("✏️ В нике должно быть минимум 4 символа")
+                return
+            if ("ROST" in nick.upper() or "RОST" in nick.upper()) and msg.from_user.id != 1179525928:
+                await send("Самый умный тут?")
+                return
+            for x in nick:
+                if not x.upper() in (list(string.ascii_letters) + list(string.digits) + allowedLetters):
+                    await send(f"✏️ Нельзя использовать символ «{x}»")
+                    return
             tablesData.execute(f"SELECT nick, id FROM users WHERE nick = '{nick}'")
             res = tablesData.fetchall()
             if len(res) != 0:
@@ -146,7 +195,6 @@ async def getMessageText(msg: types.Message):
                 tablesData.execute(f"UPDATE users SET rank = {rank} WHERE id = {msg.reply_to_message.from_user.id}")
             else:
                 user = parameters[2][1:]
-                print(user)
                 if user.isdigit():
                     tablesData.execute(f"SELECT nick, id FROM users WHERE id = {int(user)}")
                     res = tablesData.fetchall()
@@ -209,16 +257,146 @@ async def getMessageText(msg: types.Message):
                 else:
                     hyperlink = markdown.hlink(res[0][0], f"tg://openmessage?user_id={user.id}")
                 await send(f"🆔 пользователя {hyperlink} равен\n<code>@{user.id}</code>")
-        # Создание стикеров с сообщения
-        if functions.startInList(sticker):
-            text = text[len(functions.toSymbol(text, " ")):]
-            textForSticker = text[len(functions.toSymbol(text, " ")):]
-            textForSticker = textForSticker.strip()
+        # Магазин префиксов
+        if text.upper().startswith("+ПРЕФИКС "):
+            rostCoins = db.getValue("users", "rostCoins", f"WHERE id = {msg.from_user.id}")[0][0]
+            prefix = text[9:]
+            if rostCoins < 500:
+                await send(f"❌ Префикс стоит 500 РостКоинов!\n🪙 Вам не хватает {500-rostCoins} РостКоинов")
+                return
+            status = await bot.get_chat_member(msg.chat.id, msg.from_user.id)
+            status = str(status.status)
+            if status == "ChatMemberStatus.MEMBER":
+                await bot.promote_chat_member(msg.chat.id, msg.from_user.id, is_anonymous=False,  can_manage_chat=False, can_delete_messages=False,
+                                              can_manage_video_chats=False, can_restrict_members=False, can_promote_members=False,
+                                              can_invite_users=True, can_post_messages=False, can_edit_messages=False, can_pin_messages=False,
+                                              can_change_info=False, can_manage_topics=False)
+            await bot.set_chat_administrator_custom_title(msg.chat.id, msg.from_user.id, prefix)
+            await send(f"✅ Префикс изменен на {prefix}")
+            db.setValue("users", "rostCoins", rostCoins - 500, f"WHERE id = {msg.from_user.id}")
+        # Передать РостКоины
+        if text.upper().startswith("ПЕРЕДАТЬ"):
+            text = text[9:]
+            text = text.split("@")
+            coins = text[0]
+            coins = coins.replace(" ", "")
+            if coins.isdigit():
+                try:
+                    coins = int(coins)
+                except Exception as e:
+                    await send("❌ Неверно ведено значения!")
+                    return
+            else:
+                await send("❌ Неверно ведено значения!")
+                return
+            rostCoins = db.getValue("users", "rostCoins", f"WHERE id = {msg.from_user.id}")[0][0]
             if msg.reply_to_message:
-                functions.createSticker(msg.reply_to_message)
-                stickerToSend = types.FSInputFile("sticker.webp")
-                await msg.answer_sticker(sticker=stickerToSend)
-                os.remove("sticker.webp")
+                userToGetCoins = msg.reply_to_message.from_user.id
+            elif len(text) == 1:
+                userToGetCoins = msg.from_user.id
+            else:
+                userToGetCoins = text[1]
+                if userToGetCoins.isdigit():
+                    userToGetCoins = int(userToGetCoins)
+                else:
+                    userToGetCoins = await userBot.get_users(userToGetCoins)
+                    userToGetCoins = userToGetCoins.id
+
+            if coins > rostCoins:
+                await send("❌ Недостаточно РостКоинов на балансе!")
+                return
+            db.setValue("users", "rostCoins", rostCoins-coins, f"WHERE id = {msg.from_user.id}")
+            rostCoins = db.getValue("users", "rostCoins", f"WHERE id = {userToGetCoins}")[0][0]
+            db.setValue("users", "rostCoins", rostCoins + coins, f"WHERE id = {userToGetCoins}")
+            nick = db.getValue("users", "nick", f"WHERE id = {msg.from_user.id}")[0][0]
+            user = markdown.hlink(nick, f"tg://openmessage?user_id={msg.from_user.id}")
+            userToGetCoinsNick = db.getValue("users", "nick", f"WHERE id = {userToGetCoins}")[0][0]
+            userToGetCoinsNick2 = markdown.hlink(userToGetCoinsNick, f"tg://openmessage?user_id={userToGetCoins}")
+            await send(f"✅ {user} успешно передал {coins} РостКоинов к {userToGetCoinsNick2}!")
+            return
+        # Казино
+        if text.upper().startswith("КАЗИНО "):
+            rostCoins = db.getValue("users", "rostCoins", f"WHERE id = {msg.from_user.id}")[0][0]
+            coins = text[7:]
+            multiplier = random.randint(2, 4)
+            if coins.isdigit():
+                coins = int(coins)
+            else:
+                await send("❌ Ошибка! Число введено неверно!")
+                return
+            if coins > rostCoins:
+                await send("❌ Недостаточно РостКоинов на балансе!")
+                return
+            if 20 > coins:
+                await send("🪙 Ставка должна быть минимум 20 РостКоинов")
+                return
+            result = random.randint(0, 99)
+            if result < 60:
+                multiplier = random.uniform(0.5, 1)
+                await reply(f"😞 Вам не повезло...\n🪙 -{round(coins * multiplier)} с баланса")
+                db.setValue("users", "rostCoins", rostCoins - round(coins * multiplier),
+                            f"WHERE id = {msg.from_user.id}")
+            elif result < 90:
+                await reply("❓ Не знаю радоваться ли вам или нет, но вы ничего не выиграли и ничего не потеряли")
+                return
+            else:
+                multiplier = random.randint(2, 4)
+                await reply(f"🍀 УДАЧА! +{round(coins * multiplier)} к изначальному балансу!")
+                db.setValue("users", "rostCoins", rostCoins + (coins * multiplier), f"WHERE id = {msg.from_user.id}")
+                return
+
+        # Ферма
+        if functions.startInList(farm):
+            DK = db.getValue("users", "nextFarm", f"WHERE id = {msg.from_user.id}")[0][0]
+            if DK == "0" or DK == "Rostmoment":
+                DK = datetime.datetime.now()
+            else:
+                DK = datetime.datetime.strptime(DK, stringDatetimeFormat)
+            rostCoins = db.getValue("users", "rostCoins", f"WHERE id = {msg.from_user.id}")[0][0]
+            name = f"message{msg.message_id}"
+            if DK > datetime.datetime.now():
+                difference = DK - datetime.datetime.now()
+                hours = difference.total_seconds() // 3600
+                minutes = (difference.total_seconds() % 3600) // 60
+                seconds = difference.total_seconds() % 60
+                locals()[name] = await reply(f"❌ НЕЗАЧЁТ! Добывать РостКоины можно раз в 2 часа!\n📅 Следущая добыча через {round(hours)}ч. {round(minutes)}м. {round(seconds)}с.")
+            elif DK <= datetime.datetime.now():
+                coinsToAdd = random.randint(20, 75)
+                if random.randint(0, 100) == 1:
+                    coinsToAdd = random.randint(100, 500)
+                    locals()[name] = await reply(f"🔑 УДАЧА!!! Вам удалось найти потерянный кем-то ключ от хранилища РостКоинов 🪙\n+{coinsToAdd} РостКоинов к балансу!")
+                else:
+                    locals()[name] = await reply(f"✅ ЗАЧЁТ! +{coinsToAdd} РостКоинов 🪙 к балансу")
+                db.setValue("users", "rostCoins", rostCoins + coinsToAdd, f"WHERE id = {msg.from_user.id}")
+                db.setValue("users", "nextFarm", str(datetime.datetime.now() + datetime.timedelta(hours=2)), f"WHERE id = {msg.from_user.id}")
+            await asyncio.sleep(10)
+            await msg.delete()
+            await locals()[name].delete()
+        # Профиль
+        if functions.startInList(profile):
+            if msg.reply_to_message:
+                userIdToGetProfile = msg.reply_to_message.from_user.id
+            elif len(text) == functions.startInList(profile):
+                userIdToGetProfile = msg.from_user.id
+            else:
+                newText = text[text.find("@")+1:]
+                newText = newText.strip()
+                if newText.isdigit():
+                    userIdToGetProfile = int(newText)
+                else:
+                    userIdToGetProfile = await userBot.get_users(newText)
+                    userIdToGetProfile = userIdToGetProfile.id
+                user = await userBot.get_users(userIdToGetProfile)
+                firstDate = db.getValue("users", "id", f"WHERE id = {userIdToGetProfile}")
+                if len(firstDate) == 0:
+                    db.addUser(user)
+            firstDate = db.getValue("users", "firstDate", f"WHERE id = {userIdToGetProfile}")[0][0]
+            nick = db.getValue("users", "nick", f"WHERE id = {userIdToGetProfile}")[0][0]
+            messageCount = db.getValue("users", "messageCount", f"WHERE id = {userIdToGetProfile}")[0][0]
+            rostCoins = db.getValue("users", "rostCoins", f"WHERE id = {userIdToGetProfile}")[0][0]
+            rank = db.getValue("users", "rank ", f"WHERE id = {userIdToGetProfile}")[0][0]
+            rank = botData[f'rank{rank}'][3]
+            await send(f"👤 Это пользователь {nick}\n🆔 Его уникальное значения айди: {userIdToGetProfile}\n⭐ В этом чате он является {rank}\n📅 Впервые в этом чате появиля в {firstDate}\n💬 Он в этом чате отправил {messageCount} сообщений\n🪙 У него на балансе {rostCoins} РостКоинов")
         # Отметить всех
         if functions.startInList(tagAll):
             if rank < commandSettings["tagAll"]:
@@ -249,6 +427,9 @@ async def getMessageText(msg: types.Message):
             tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.from_user.id}")
             moderlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.from_user.id}")
             if msg.reply_to_message:
+                if rank <= userRank:
+                    await send("📝 Ранг модератора недостаточен, чтобы наказывать как-то модератора старшему или равному по рангу")
+                    return
                 tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.reply_to_message.from_user.id}")
                 hyperlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.reply_to_message.from_user.id}")
                 if len(text) == 0:
@@ -285,6 +466,11 @@ async def getMessageText(msg: types.Message):
                 user = await userBot.get_users(user)
             else:
                 user = await userBot.get_users(int(user))
+            tablesData.execute(f"SELECT rank FROM users WHERE id = {user.id}")
+            userRank = tablesData.fetchall()[0][0]
+            if rank <= userRank:
+                await send("📝 Ранг модератора недостаточен, чтобы наказывать как-то модератора старшему или равному по рангу")
+                return
             tablesData.execute(f"SELECT nick FROM users WHERE id = {user.id}")
             res = tablesData.fetchall()
             if len(res) == 0:
@@ -322,6 +508,9 @@ async def getMessageText(msg: types.Message):
             tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.from_user.id}")
             moderlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.from_user.id}")
             if msg.reply_to_message:
+                if rank <= userRank:
+                    await send("📝 Ранг модератора недостаточен, чтобы наказывать как-то модератора старшему или равному по рангу")
+                    return
                 tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.reply_to_message.from_user.id}")
                 hyperlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.reply_to_message.from_user.id}")
                 if len(text) == 0:
@@ -358,6 +547,11 @@ async def getMessageText(msg: types.Message):
                 user = await userBot.get_users(user)
             else:
                 user = await userBot.get_users(int(user))
+            tablesData.execute(f"SELECT rank FROM users WHERE id = {user.id}")
+            userRank = tablesData.fetchall()[0][0]
+            if rank <= userRank:
+                await send("📝 Ранг модератора недостаточен, чтобы наказывать как-то модератора старшему или равному по рангу")
+                return
             tablesData.execute(f"SELECT nick FROM users WHERE id = {user.id}")
             res = tablesData.fetchall()
             if len(res) == 0:
@@ -391,6 +585,9 @@ async def getMessageText(msg: types.Message):
                 return
             parameters = text.split()
             if msg.reply_to_message:
+                if rank <= userRank:
+                    await send("📝 Ранг модератора недостаточен, чтобы наказывать как-то модератора старшему или равному по рангу")
+                    return
                 tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.reply_to_message.from_user.id}")
                 hyperlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={msg.reply_to_message.from_user.id}")
                 tablesData.execute(f"SELECT nick FROM users WHERE id = {msg.from_user.id}")
@@ -407,6 +604,11 @@ async def getMessageText(msg: types.Message):
                 user = user.id
             else:
                 user = int(parameters[1][1:])
+            tablesData.execute(f"SELECT rank FROM users WHERE id = {user}")
+            userRank = tablesData.fetchall()[0][0]
+            if rank <= userRank:
+                await send("📝 Ранг модератора недостаточен, чтобы наказывать как-то модератора старшему или равному по рангу")
+                return
             tablesData.execute(f"SELECT nick FROM users WHERE id = {user}")
             hyperlink = markdown.hlink(tablesData.fetchall()[0][0], f"tg://openmessage?user_id={user}")
             await bot.ban_chat_member(chat_id=msg.chat.id, user_id=user)
@@ -458,6 +660,37 @@ async def getMessageText(msg: types.Message):
                 text += f"{i}. {hyperlink} — {top[i - 1][1]}\n"
             text += f"\nВсего сообщений от пользователей было насчитано: {totalMessage}"
             await send(text)
+        # Топ по ростКоинам
+        if text.upper().startswith("РТОП"):
+            if rank < commandSettings["topCommand"]:
+                rank = botData[f'rank{commandSettings["topCommand"]}'][0]
+                await send(f"Команда доступна только с ранга «{rank}» ({commandSettings['topCommand']})")
+                return
+            tablesData.execute(f"SELECT id, rostCoins FROM users WHERE rostCoins>0")
+            res = tablesData.fetchall()
+            totalCoins = 0
+            N = text[5:]
+            for x in range(len((res))):
+                totalCoins += res[x][1]
+            if N.isdigit() or N.isnumeric():
+                N = int(N)
+            else:
+                N = 10
+            if N > len(res):
+                N = len(res)
+            if N == 0 or N < 0:
+                await send("📊 Количество мест должно быть больше чем 0")
+                return
+            text = ""
+            text += f"📊 Топ {N} самых богатых участников чатa по РостКоинам 🪙\n\n"
+            top = functions.top(N, res)
+            for i in range(1, N + 1):
+                tablesData.execute(f"SELECT nick FROM users WHERE id = {top[i - 1][0]}")
+                res = tablesData.fetchall()
+                hyperlink = markdown.hlink(res[0][0], f"tg://openmessage?user_id={top[i - 1][0]}")
+                text += f"{i}. {hyperlink} — {top[i - 1][1]}\n"
+            text += f"\nОбщее количесвто РостКоинов 🪙 в участников: {totalCoins}"
+            await send(text)
         # Рандом
         if functions.startInList(rng):
             if rank < commandSettings["rng"]:
@@ -498,12 +731,16 @@ async def getMessageText(msg: types.Message):
     # Если случилась ошибка отправляем сообщения об ошибке
     except Exception as e:
         await send(f"⚠ Ошибка в {e.__traceback__.tb_lineno} строке!\n\n<code>{e}</code>")
-    # Используем finally чтобы после обработки команды либо ошибки чтобы применить изменения и закрыть бд
+    # Используем finally чтобы после обработки команды либо ошибки применить изменения и закрыть бд
     finally:
         tables.commit()
         tables.close()
+# Чтобы бот НЕ читал сообщения кода он выключен, это нужно чтобы он не упал иза обробки слишком большого количества сообщений
+async def on_startup(bot: Bot):
+    await bot.delete_webhook(drop_pending_updates=True)
 # Запускаем бота
 async def start():
+    dp.startup.register(on_startup)
     await userBot.start()
     await dp.start_polling(bot)
     await asyncio.Future()
